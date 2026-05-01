@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && request.auth.token.email == 'hafeezpattan7@gmail.com';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.keys().hasAll(['uid', 'name', 'role', 'bloodGroup']) &&
+               data.uid == request.auth.uid &&
+               data.name is string && data.name.size() <= 100 &&
+               data.role in ['donor', 'recipient'] &&
+               data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+      }
+
+      // Allow getting self or any donor profile (public-ish but authenticated)
+      allow get: if isSignedIn();
+      
+      // Explicit list check for searching donors
+      allow list: if isSignedIn() && (
+        resource.data.uid == request.auth.uid || 
+        resource.data.role == 'donor'
+      );
+      
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      
+      allow update: if (isOwner(userId) || isAdmin()) && 
+                    isValidUser(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'location', 'lastDonationDate', 'isAvailable', 'updatedAt']);
+      
+      allow delete: if isAdmin();
+
+      // Notifications subcollection
+      match /notifications/{notificationId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // --- Requests Collection ---
+    match /requests/{requestId} {
+      function isValidRequest(data) {
+        return data.keys().hasAll(['requesterId', 'bloodGroup', 'units', 'urgency', 'status']) &&
+               data.requesterId == request.auth.uid &&
+               data.bloodGroup in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] &&
+               data.units is number && data.units > 0 &&
+               data.urgency in ['low', 'medium', 'high', 'emergency'] &&
+               data.status in ['open', 'fulfilled', 'cancelled'];
+      }
+
+      // Allow anyone (even guests) to see open requests to drive engagement
+      allow get: if true;
+      allow list: if resource.data.status == 'open' || 
+                    (isSignedIn() && resource.data.requesterId == request.auth.uid) ||
+                    isAdmin();
+
+      allow create: if isEmailVerified() && isValidRequest(incoming());
+      
+      allow update: if (isEmailVerified() && (
+        (existing().requesterId == request.auth.uid && isValidRequest(incoming())) ||
+        // Action: Respond/Update Status (limited fields)
+        (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+      )) || isAdmin();
+      
+      allow delete: if (isEmailVerified() && existing().requesterId == request.auth.uid) || isAdmin();
+    }
+
+    // --- Chats & Messages ---
+    match /chats/{chatId} {
+      function isChatParticipant(id) {
+        return isSignedIn() && (request.auth.uid in id.split('_'));
+      }
+
+      allow read: if isChatParticipant(chatId) || isAdmin();
+      allow write: if isChatParticipant(chatId) || isAdmin();
+
+      match /messages/{messageId} {
+        allow read: if isChatParticipant(chatId) || isAdmin();
+        allow create: if isChatParticipant(chatId) && 
+                      incoming().senderId == request.auth.uid &&
+                      incoming().text is string && incoming().text.size() <= 1000;
+        allow delete: if isAdmin();
+      }
+    }
+  }
+}

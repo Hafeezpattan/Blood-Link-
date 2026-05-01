@@ -1,0 +1,14 @@
+{
+  "name": "LifeLink Blood Donation App",
+  "description": "A real-time blood donation platform connecting donors and recipients based on location and blood group matching.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "Real-time Chat",
+    "Google Maps Integration",
+    "AI Donor Matching",
+    "Firebase Authentication",
+    "Emergency Notifications"
+  ]
+}
